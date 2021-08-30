@@ -16,19 +16,7 @@ import numpy as np
 import argparse
 import os
 
-# construct the argument parser and parse the arguments
-# ap = argparse.ArgumentParser()
-# ap.add_argument("-d", "--dataset", required=True,
-#   help="path to input dataset")
-# ap.add_argument("-p", "--plot", type=str, default="plot.png",
-#   help="path to output loss/accuracy plot")
-# ap.add_argument("-m", "--model", type=str,
-#   default="mask_detector.model",
-#   help="path to output face mask detector model")
-# args = vars(ap.parse_args())
 
-# initialize the initial learning rate, number of epochs to train for,
-# and batch size
 INIT_LR = 1e-4
 EPOCHS = 20
 BS = 32
@@ -37,18 +25,16 @@ print("[INFO] loading images...")
 imagePaths = list(paths.list_images('./dataset'))
 data = []
 labels = []
-# loop over the image paths
+
+# loop para ler o dataset
 for imagePath in imagePaths:
-    # extract the class label from the filename
     label = imagePath.split(os.path.sep)[-2]
-    # load the input image (224x224) and preprocess it
+    # setando as dimensões da imagem para 224,224 para serem compativeis com o modelo mobilenet
     image = load_img(imagePath, target_size=(224, 224))
     image = img_to_array(image)
     image = preprocess_input(image)
-    # update the data and labels lists, respectively
     data.append(image)
     labels.append(label)
-# convert the data and labels to NumPy arrays
 data = np.array(data, dtype="float32")
 labels = np.array(labels)
 
@@ -56,6 +42,7 @@ lb = LabelBinarizer()
 labels = lb.fit_transform(labels)
 labels = to_categorical(labels)
 
+#train/test/val split
 (trainX, testX, trainY, testY) = train_test_split(data, labels,
 	test_size=0.30, stratify=labels, random_state=39)
 print(len(testX))
@@ -63,6 +50,7 @@ print(len(testY))
 (testX, valX, testY, valY) = train_test_split(testX, testY,
 	test_size=0.50, stratify=testY, random_state=42)
 
+#data augmentation
 aug = ImageDataGenerator(
 	rotation_range=20,
 	zoom_range=0.15,
@@ -72,6 +60,7 @@ aug = ImageDataGenerator(
 	horizontal_flip=True,
 	fill_mode="nearest")
 
+#estrutura de rede do nosso modelo 1
 model =Sequential([
     Conv2D(100, (3,3), activation='relu', input_shape=(224, 224, 3)),
     MaxPooling2D(2,2),
@@ -88,6 +77,7 @@ model =Sequential([
 optim = Adam(lr=INIT_LR, decay=INIT_LR / EPOCHS)
 model.compile(optimizer=optim, loss='binary_crossentropy', metrics=['acc'])
 
+#treinamento
 H = model.fit(
 	aug.flow(trainX, trainY, batch_size=BS),
 	steps_per_epoch=len(trainX) // BS,
@@ -95,6 +85,7 @@ H = model.fit(
 	validation_steps=len(valX) // BS,
 	epochs=EPOCHS)
 
+#teste
 predIdxs = model.predict(testX, batch_size=BS)
 predIdxs = np.argmax(predIdxs, axis=1)
 
@@ -104,10 +95,13 @@ print(classification_report(testY.argmax(axis=1), predIdxs,
 print("[INFO] saving mask detector model...")
 model.save('./mask_detector.model', save_format="h5")
 
-##fine tuning pipeline
+#fine tuning pipeline
+
+#lendo modelo da mobilenetV2 treinado com o imagenet,removendo as camadas fully connected
 baseModel = MobileNetV2(weights="imagenet", include_top=False,
     input_tensor=Input(shape=(224, 224, 3)))
 
+#adicionando nossas camadas fully connected
 headModel = baseModel.output
 headModel = AveragePooling2D(pool_size=(7, 7))(headModel)
 headModel = Flatten(name="flatten")(headModel)
@@ -117,19 +111,20 @@ headModel = Dense(2, activation="softmax")(headModel)
 
 fine_tuned_model = Model(inputs=baseModel.input, outputs=headModel)
 
-#freezing hidden layers
+#congelando as camadas escondidas
 for layer in baseModel.layers:
     layer.trainable= False
 
 fine_tuned_model.compile(optimizer=optim, loss='binary_crossentropy', metrics=['acc'])
 
+#treinamento
 fine_tuned_H = fine_tuned_model.fit(
 	aug.flow(trainX, trainY, batch_size=BS),
 	steps_per_epoch=len(trainX) // BS,
 	validation_data=(valX, valY),
 	validation_steps=len(valX) // BS,
 	epochs=EPOCHS)
-
+#teste
 predIdxs = fine_tuned_model.predict(testX, batch_size=BS)
 predIdxs = np.argmax(predIdxs, axis=1)
 
